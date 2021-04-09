@@ -28,6 +28,7 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
+import filecmp
 from hashlib import md5
 import os
 import shutil
@@ -91,14 +92,15 @@ class DataHash:
                 os.unlink(self._filename)
             except BaseException:
                 pass
-            else:
-                _datafile_mutex.lock()
-                try:
-                    self._filename = None
-                    del _datafiles[self._hash]
-                    self._hash = None
-                finally:
-                    _datafile_mutex.unlock()
+            _datafile_mutex.lock()
+            try:
+                del _datafiles[self._hash]
+            except KeyError:
+                pass
+            finally:
+                self._filename = None
+                self._hash = None
+                _datafile_mutex.unlock()
 
     @property
     def data(self):
@@ -295,13 +297,11 @@ class CoverArtImage:
             filename = os.path.join(dirname, filename)
         return encode_filename(filename)
 
-    def save(self, dirname, metadata, counters):
+    def save(self, dirname, metadata):
         """Saves this image.
 
         :dirname: The name of the directory that contains the audio file
         :metadata: A metadata object
-        :counters: A dictionary mapping filenames to the amount of how many
-                    images with that filename were already saved in `dirname`.
         """
         if not self.can_be_saved_to_disk:
             return
@@ -317,40 +317,48 @@ class CoverArtImage:
 
         overwrite = config.setting["save_images_overwrite"]
         ext = encode_filename(self.extension)
-        image_filename = self._next_filename(filename, counters)
-        while os.path.exists(image_filename + ext) and not overwrite:
-            if not self._is_write_needed(image_filename + ext):
-                break
-            image_filename = self._next_filename(filename, counters)
-        else:
-            new_filename = image_filename + ext
-            # Even if overwrite is enabled we don't need to write the same
-            # image multiple times
-            if not self._is_write_needed(new_filename):
-                return
-            log.debug("Saving cover image to %r", new_filename)
+
+        def clean_path(filename, ext, suffix=None):
+            path = decode_filename(filename)
+            if suffix is not None:
+                path += suffix
+            path += decode_filename(ext)
+            return os.path.abspath(os.path.realpath(encode_filename(path)))
+
+        def _mkdir_and_copy(source, target):
             try:
-                new_dirname = os.path.dirname(new_filename)
-                if not os.path.isdir(new_dirname):
-                    os.makedirs(new_dirname)
-                shutil.copyfile(self.tempfile_filename, new_filename)
-            except OSError as e:
+                dirname = os.path.dirname(target)
+                if not os.path.isdir(dirname):
+                    os.makedirs(dirname)
+                shutil.copyfile(source, target)
+            except (OSError, IOError) as e:
                 raise CoverArtImageIOError(e)
 
-    def _next_filename(self, filename, counters):
-        if counters[filename]:
-            new_filename = "%s (%d)" % (decode_filename(filename), counters[filename])
-        else:
-            new_filename = filename
-        counters[filename] += 1
-        return encode_filename(new_filename)
+        def copy_tmp_to_target(target):
+            if not os.path.exists(target):
+                _mkdir_and_copy(self.tempfile_filename, target)
+            else:
+                filecmp.clear_cache()
+                files_differ = not filecmp.cmp(self.tempfile_filename, target,
+                                               shallow=False)
+                if files_differ:
+                    _mkdir_and_copy(self.tempfile_filename, target)
 
-    def _is_write_needed(self, filename):
-        if (os.path.exists(filename)
-                and os.path.getsize(filename) == self.datalength):
-            log.debug("Identical file size, not saving %r", filename)
-            return False
-        return True
+        target = clean_path(filename, ext)
+        if overwrite or not os.path.exists(target):
+            log.debug("Saving cover image to %r (overwrite: %r)", target,
+                      overwrite)
+            copy_tmp_to_target(target)
+        else:
+            num = 1
+            while True:
+                suffix = " (%d)" % num
+                target = clean_path(filename, ext, suffix=suffix)
+                if not os.path.exists(target):
+                    break
+                num += 1
+            log.debug("Saving cover image to %r", target)
+            copy_tmp_to_target(target)
 
     @property
     def data(self):
@@ -359,8 +367,8 @@ class CoverArtImage:
         """
         try:
             return self.datahash.data
-        except OSError as e:
-            raise CoverArtImageIOError(e)
+        except (OSError, IOError, FileNotFoundError) as e:
+            raise CoverArtImageIOError(e) from None
 
     @property
     def tempfile_filename(self):

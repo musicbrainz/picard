@@ -41,7 +41,6 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from collections import defaultdict
 import fnmatch
 from functools import partial
 import os
@@ -513,7 +512,6 @@ class File(QtCore.QObject, Item):
         """Save the cover images to disk."""
         if not metadata.images:
             return
-        counters = defaultdict(lambda: 0)
         images = []
         config = get_config()
         if config.setting["save_only_one_front_image"]:
@@ -523,7 +521,7 @@ class File(QtCore.QObject, Item):
         if not images:
             images = metadata.images
         for image in images:
-            image.save(dirname, metadata, counters)
+            image.save(dirname, metadata)
 
     def _move_additional_files(self, old_filename, new_filename):
         """Move extra files, like images, playlists..."""
