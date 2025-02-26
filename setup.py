@@ -148,7 +148,13 @@ class picard_build(build):
         except ValueError:
             self.build_number = 0
         if self.disable_autoupdate is None:
-            self.disable_autoupdate = False
+            # Support setting this option with an environment variable as
+            # a workaround for https://tickets.metabrainz.org/browse/PICARD-3003
+            self.disable_autoupdate = os.environ.get('PICARD_DISABLE_AUTOUPDATE')
+            if not self.disable_autoupdate or self.disable_autoupdate == '0':
+                self.disable_autoupdate = False
+            else:
+                self.disable_autoupdate = True
         self.sub_commands.append(('build_locales', None))
 
     def run(self):
